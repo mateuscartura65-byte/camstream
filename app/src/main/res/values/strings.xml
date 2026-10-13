@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">Camera para PC</string>
+    <string name="titulo">Camera para PC</string>
+    <string name="status_inicial">Ligando...</string>
+    <string name="hint_codigo">Codigo da sala</string>
+    <string name="botao">OK</string>
+</resources>
