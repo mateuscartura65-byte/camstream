@@ -1,0 +1,5 @@
+<resources>
+    <style name="Theme.CamStream" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">#7CC4FF</item>
+    </style>
+</resources>
