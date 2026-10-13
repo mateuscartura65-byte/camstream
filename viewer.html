@@ -3,53 +3,33 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Camera do celular no PC</title>
+<title>.</title>
 <style>
-  body { margin:0; background:#0b0b0b; color:#eee; font-family:system-ui,sans-serif;
-         display:flex; flex-direction:column; align-items:center; min-height:100vh; }
-  header { padding:14px; display:flex; gap:8px; flex-wrap:wrap; justify-content:center; }
-  input,button { font-size:16px; padding:10px 14px; border-radius:10px;
-                 border:1px solid #333; background:#1a1a1a; color:#eee; }
-  button { background:#e53935; border-color:#e53935; font-weight:600; cursor:pointer; }
-  #status { font-size:13px; color:#9ad; padding:4px 14px; }
-  img { max-width:100%; max-height:78vh; border-radius:12px; margin-top:10px; background:#000; }
+  html,body { margin:0; height:100%; background:#000; overflow:hidden; }
+  body { display:flex; align-items:center; justify-content:center; }
+  img { max-width:100%; max-height:100vh; }
+  #status { position:fixed; top:8px; left:8px; color:#8af; font:12px system-ui;
+            background:#0008; padding:4px 8px; border-radius:8px; }
 </style>
 </head>
 <body>
-<header>
-  <input id="code" placeholder="Codigo da sala" value="1234">
-  <button id="connect">Conectar</button>
-</header>
-<div id="status">Desconectado</div>
+<div id="status">conectando...</div>
 <img id="view" alt="">
-
 <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
 <script>
-const TOPICO_BASE = "venice/cam/";
-const BROKER = "wss://broker.hivemq.com:8884/mqtt";
-let client = null;
-
-document.getElementById('connect').onclick = conectar;
-
-function conectar() {
-  const code = document.getElementById('code').value.trim();
-  if (!code) return;
-  if (client) { try { client.end(true); } catch(e){} client = null; }
-  const status = document.getElementById('status');
-  status.textContent = 'Conectando...';
-  client = mqtt.connect(BROKER, { clientId: 'pc_' + Math.random().toString(16).slice(2) });
-  client.on('connect', () => {
-    status.textContent = 'Conectado. Aguardando camera...';
-    client.subscribe(TOPICO_BASE + code, { qos: 0 });
-  });
-  client.on('message', (t, payload) => {
-    document.getElementById('view').src = 'data:image/jpeg;base64,' + payload.toString();
-    status.textContent = 'Recebendo...';
-  });
-  client.on('error', e => status.textContent = 'Erro: ' + e.message);
-  client.on('close', () => status.textContent = 'Desconectado');
-}
-conectar();
+const TOPICO = "venice/cam/pc";
+const client = mqtt.connect("wss://broker.hivemq.com:8884/mqtt", {
+  clientId: "pc_" + Math.random().toString(16).slice(2)
+});
+client.on('connect', () => {
+  document.getElementById('status').textContent = 'conectado, aguardando...';
+  client.subscribe(TOPICO, { qos: 0 });
+});
+client.on('message', (t, p) => {
+  document.getElementById('view').src = 'data:image/jpeg;base64,' + p.toString();
+  document.getElementById('status').textContent = 'ao vivo';
+});
+client.on('close', () => document.getElementById('status').textContent = 'desconectado');
 </script>
 </body>
 </html>
