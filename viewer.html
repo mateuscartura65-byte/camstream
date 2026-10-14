@@ -1,35 +1,271 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="pt-BR">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>.</title>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CamStream — Multi-dispositivo</title>
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
 <style>
-  html,body { margin:0; height:100%; background:#000; overflow:hidden; }
-  body { display:flex; align-items:center; justify-content:center; }
-  img { max-width:100%; max-height:100vh; }
-  #status { position:fixed; top:8px; left:8px; color:#8af; font:12px system-ui;
-            background:#0008; padding:4px 8px; border-radius:8px; }
+  :root{
+    --bg1:#0a0f1e; --bg2:#05070f; --card:#101828;
+    --linha:#23304a; --txt:#e8eefc; --dim:#7d8aa5;
+    --verde:#3ddc84; --vermelho:#ff5252; --amarelo:#ffd54f;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    background:radial-gradient(1200px 700px at 50% -10%, #16223d 0%, var(--bg1) 45%, var(--bg2) 100%);
+    color:var(--txt);
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    display:flex;flex-direction:column;overflow:hidden;
+  }
+  header{
+    display:flex;align-items:center;gap:16px;padding:12px 18px;
+    border-bottom:1px solid var(--linha);background:#0b1120cc;
+  }
+  .brand{font-weight:700;letter-spacing:.22em;font-size:14px}
+  .brand span{color:var(--vermelho);letter-spacing:.05em}
+  .conn{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--dim)}
+  .conn i{width:9px;height:9px;border-radius:50%;background:var(--vermelho);display:block}
+  .conn.on i{background:var(--verde);box-shadow:0 0 10px var(--verde)}
+  .tools{margin-left:auto;display:flex;gap:8px}
+  button{
+    background:#16223d;color:var(--txt);border:1px solid var(--linha);
+    padding:7px 14px;border-radius:9px;font:inherit;font-size:12px;cursor:pointer;
+  }
+  button:hover{border-color:#3a4d75}
+  button.ativo{background:var(--vermelho);border-color:var(--vermelho);color:#fff}
+
+  nav.tabs{display:flex;gap:8px;padding:10px 18px;overflow-x:auto;border-bottom:1px solid var(--linha)}
+  .tab{
+    display:flex;flex-direction:column;gap:3px;min-width:136px;
+    padding:8px 14px;border-radius:10px;border:1px solid var(--linha);
+    background:var(--card);cursor:pointer;user-select:none;flex:0 0 auto;
+  }
+  .tab .n{font-size:13px;font-weight:700}
+  .tab .m{font-size:10px;color:var(--dim);display:flex;align-items:center;gap:6px}
+  .tab .m i{width:7px;height:7px;border-radius:50%;background:var(--vermelho);flex:0 0 auto}
+  .tab.on{border-color:#2f6b4a}
+  .tab.sel{background:#1b2a45;border-color:var(--amarelo)}
+  .tab.sel .n{color:var(--amarelo)}
+
+  main{flex:1;position:relative;min-height:0}
+  .view{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#000}
+  .view img{max-width:100%;max-height:100%;object-fit:contain;display:none}
+  .view img.on{display:block}
+  .vazio{position:absolute;color:var(--dim);font-size:14px;letter-spacing:.1em}
+  .hud{
+    position:absolute;top:12px;left:14px;display:flex;gap:12px;align-items:center;
+    background:#000a;padding:6px 12px;border-radius:8px;font-size:12px;border:1px solid var(--linha)
+  }
+  .hud b{color:var(--amarelo)}
+  .hud .fps{color:var(--dim)}
+
+  .grade{position:absolute;inset:0;display:grid;gap:6px;padding:6px;background:#000}
+  .grade[hidden]{display:none}
+  .cel{
+    position:relative;background:#0a0f1e;border:1px solid var(--linha);border-radius:8px;
+    overflow:hidden;display:flex;align-items:center;justify-content:center;cursor:pointer
+  }
+  .cel img{width:100%;height:100%;object-fit:contain}
+  .cel .tag{
+    position:absolute;top:6px;left:8px;font-size:11px;background:#000a;
+    padding:3px 9px;border-radius:6px
+  }
+  .cel .tag i{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--vermelho);margin-right:6px}
+  .cel.on .tag i{background:var(--verde)}
 </style>
 </head>
 <body>
-<div id="status">conectando...</div>
-<img id="view" alt="">
-<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+
+<header>
+  <div class="brand">CAMSTREAM <span>multi</span></div>
+  <div class="conn" id="conn"><i></i><span id="connTxt">conectando…</span></div>
+  <div class="tools">
+    <button id="btnGrade">Grade</button>
+    <button id="btnFull">Tela cheia</button>
+    <button id="btnLimpar">Limpar</button>
+  </div>
+</header>
+
+<nav class="tabs" id="tabs"></nav>
+
+<main id="stage">
+  <div class="view" id="view">
+    <img id="frame" alt="">
+    <div class="vazio" id="vazio">Nenhum dispositivo conectado</div>
+    <div class="hud" id="hud" hidden><b id="hudNome"></b><span class="fps" id="hudFps"></span></div>
+  </div>
+  <div class="grade" id="grade" hidden></div>
+</main>
+
 <script>
-const TOPICO = "venice/cam/pc";
-const client = mqtt.connect("wss://broker.hivemq.com:8884/mqtt", {
-  clientId: "pc_" + Math.random().toString(16).slice(2)
+const BROKER = 'wss://broker.hivemq.com:8884/mqtt';
+const PREFIXO = 'camstream';
+const MAX = 6;
+const TIMEOUT = 25000;
+
+const aparelhos = new Map();     // id -> {nome, ts, off, frame, ordem}
+let seq = 0, ativo = null, modoGrade = false;
+const fps = {};
+
+const $ = id => document.getElementById(id);
+const tabsEl = $('tabs'), gradeEl = $('grade'), viewEl = $('view');
+const frameEl = $('frame'), vazioEl = $('vazio'), hudEl = $('hud');
+const hudNome = $('hudNome'), hudFps = $('hudFps'), connEl = $('conn'), connTxt = $('connTxt');
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+// ---------------- conexao ----------------
+const client = mqtt.connect(BROKER, {
+  clientId: 'pcview_' + Math.random().toString(16).slice(2),
+  clean: true, reconnectPeriod: 2000, connectTimeout: 8000
 });
+
 client.on('connect', () => {
-  document.getElementById('status').textContent = 'conectado, aguardando...';
-  client.subscribe(TOPICO, { qos: 0 });
+  connEl.classList.add('on');
+  connTxt.textContent = 'conectado';
+  client.subscribe(PREFIXO + '/+/info', { qos: 1 });
+  client.subscribe(PREFIXO + '/+/frame', { qos: 0 });
 });
-client.on('message', (t, p) => {
-  document.getElementById('view').src = 'data:image/jpeg;base64,' + p.toString();
-  document.getElementById('status').textContent = 'ao vivo';
+client.on('reconnect', () => { connEl.classList.remove('on'); connTxt.textContent = 'reconectando…'; });
+client.on('close',     () => { connEl.classList.remove('on'); connTxt.textContent = 'desconectado'; });
+client.on('error',     () => { connTxt.textContent = 'erro de conexao'; });
+
+client.on('message', (topico, payload) => {
+  const p = topico.split('/');
+  if (p.length !== 3 || p[0] !== PREFIXO) return;
+  const id = p[1], tipo = p[2];
+
+  if (tipo === 'info') {
+    let d;
+    try { d = JSON.parse(payload.toString()); } catch (e) { return; }
+    if (!aparelhos.has(id)) {
+      if (aparelhos.size >= MAX) return;              // limite de 6
+      aparelhos.set(id, { nome: 'Dispositivo', ts: 0, off: false, frame: null, ordem: seq++ });
+    }
+    const a = aparelhos.get(id);
+    a.nome = d.n || a.nome;
+    a.off = !!d.off;
+    if (d.t) a.ts = d.t;
+    desenharTabs();
+    if (!ativo) selecionar(id);
+  } else if (tipo === 'frame') {
+    const a = aparelhos.get(id);
+    if (!a) return;
+    a.frame = 'data:image/jpeg;base64,' + payload.toString();
+    a.ts = Date.now();
+    a.off = false;
+    fps[id] = (fps[id] || 0) + 1;
+    if (ativo === id) frameEl.src = a.frame;
+    if (modoGrade) atualizarGrade();
+  }
 });
-client.on('close', () => document.getElementById('status').textContent = 'desconectado');
+
+// ---------------- lista de abas ----------------
+const ordenados = () => [...aparelhos.entries()].sort((x, y) => x[1].ordem - y[1].ordem);
+
+function desenharTabs() {
+  tabsEl.innerHTML = '';
+  ordenados().forEach(([id, a], i) => {
+    const t = document.createElement('div');
+    t.className = 'tab' + (ativo === id ? ' sel' : '') + (a.off ? '' : ' on');
+    t.innerHTML = `<div class="n">Dispositivo ${i + 1}</div>
+                   <div class="m"><i></i>${esc(a.nome)}</div>`;
+    t.onclick = () => selecionar(id);
+    tabsEl.appendChild(t);
+  });
+  if (modoGrade) montarGrade();
+}
+
+function selecionar(id) {
+  ativo = id;
+  const a = aparelhos.get(id);
+  if (a && a.frame) {
+    frameEl.src = a.frame;
+    frameEl.classList.add('on');
+    vazioEl.style.display = 'none';
+  } else {
+    frameEl.classList.remove('on');
+    vazioEl.style.display = 'block';
+  }
+  hudEl.hidden = !a;
+  if (a) hudNome.textContent = a.nome + (a.off ? ' · offline' : '');
+  desenharTabs();
+}
+
+// ---------------- modo grade ----------------
+const cels = new Map();
+
+function montarGrade() {
+  gradeEl.innerHTML = '';
+  cels.clear();
+  ordenados().forEach(([id, a], i) => {
+    const c = document.createElement('div');
+    c.className = 'cel';
+    const img = document.createElement('img');
+    const tag = document.createElement('div');
+    tag.className = 'tag';
+    c.appendChild(img); c.appendChild(tag);
+    c.onclick = () => { setModo(false); selecionar(id); };
+    gradeEl.appendChild(c);
+    cels.set(id, { c, img, tag });
+  });
+  const n = Math.max(1, aparelhos.size);
+  const cols = n <= 1 ? 1 : n <= 4 ? 2 : 3;
+  gradeEl.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+  gradeEl.style.gridTemplateRows = `repeat(${Math.ceil(n / cols)}, 1fr)`;
+  atualizarGrade();
+}
+
+function atualizarGrade() {
+  ordenados().forEach(([id, a], i) => {
+    const e = cels.get(id);
+    if (!e) return;
+    e.c.classList.toggle('on', !a.off);
+    e.tag.innerHTML = `<i></i>Dispositivo ${i + 1} · ${esc(a.nome)}`;
+    if (a.frame && e.img.getAttribute('src') !== a.frame) e.img.src = a.frame;
+  });
+}
+
+function setModo(g) {
+  modoGrade = g;
+  $('btnGrade').classList.toggle('ativo', g);
+  gradeEl.hidden = !g;
+  viewEl.style.display = g ? 'none' : 'flex';
+  if (g) montarGrade();
+}
+
+// ---------------- controles ----------------
+$('btnGrade').onclick = () => setModo(!modoGrade);
+$('btnFull').onclick = () => {
+  if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+  else document.exitFullscreen();
+};
+$('btnLimpar').onclick = () => {
+  aparelhos.clear(); cels.clear(); seq = 0; ativo = null;
+  frameEl.classList.remove('on');
+  vazioEl.style.display = 'block';
+  hudEl.hidden = true;
+  tabsEl.innerHTML = '';
+  gradeEl.innerHTML = '';
+};
+
+// ---------------- fps ----------------
+setInterval(() => {
+  hudFps.textContent = ativo ? (fps[ativo] || 0) + ' fps' : '';
+  for (const k in fps) fps[k] = 0;
+}, 1000);
+
+// ---------------- watchdog offline ----------------
+setInterval(() => {
+  let mudou = false;
+  const agora = Date.now();
+  aparelhos.forEach(a => {
+    const off = a.off || (a.ts > 0 && agora - a.ts > TIMEOUT);
+    if (off !== a.off) { a.off = off; mudou = true; }
+  });
+  if (mudou) { desenharTabs(); if (modoGrade) atualizarGrade(); if (ativo) selecionar(ativo); }
+}, 3000);
 </script>
 </body>
 </html>
