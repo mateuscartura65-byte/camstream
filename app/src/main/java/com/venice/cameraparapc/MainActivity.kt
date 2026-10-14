@@ -1,13 +1,20 @@
 package com.venice.cameraparapc
 
 import android.Manifest
+import android.animation.ObjectAnimator
+import android.animation.PropertyValuesHolder
+import android.animation.ValueAnimator
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.view.View
+import android.view.animation.AccelerateDecelerateInterpolator
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.TextView
@@ -24,7 +31,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var raiz: FrameLayout
     private lateinit var tvStatus: TextView
     private lateinit var tvContador: TextView
+    private lateinit var tvDispositivo: TextView
     private lateinit var btnVermelho: Button
+    private lateinit var ponto: View
 
     private var cliques = 0
     private val reqPerm = 1001
@@ -43,11 +52,44 @@ class MainActivity : AppCompatActivity() {
         raiz = findViewById(R.id.raiz)
         tvStatus = findViewById(R.id.tvStatus)
         tvContador = findViewById(R.id.tvContador)
+        tvDispositivo = findViewById(R.id.tvDispositivo)
         btnVermelho = findViewById(R.id.btnVermelho)
+        ponto = findViewById(R.id.ponto)
+
+        tvDispositivo.text = "DISPOSITIVO " + CameraService.nomeDispositivo() +
+                " · " + CameraService.idDispositivo(this)
 
         btnVermelho.setOnClickListener { v -> soltarMaisUm(v) }
-
+        pulsar()
+        ligar(false)
         pedirPermissoes()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+                == PackageManager.PERMISSION_GRANTED) {
+            iniciarServico()
+        }
+    }
+
+    private fun pulsar() {
+        ObjectAnimator.ofPropertyValuesHolder(
+            btnVermelho,
+            PropertyValuesHolder.ofFloat(View.SCALE_X, 1f, 1.09f),
+            PropertyValuesHolder.ofFloat(View.SCALE_Y, 1f, 1.09f)
+        ).apply {
+            duration = 950
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.REVERSE
+            interpolator = AccelerateDecelerateInterpolator()
+        }.start()
+    }
+
+    private fun ligar(ativo: Boolean) {
+        ponto.backgroundTintList =
+            ColorStateList.valueOf(Color.parseColor(if (ativo) "#4CAF50" else "#E53935"))
+        tvStatus.text = if (ativo) "AO VIVO" else "OFFLINE"
     }
 
     private fun pedirPermissoes() {
@@ -61,24 +103,32 @@ class MainActivity : AppCompatActivity() {
                 != PackageManager.PERMISSION_GRANTED) {
             faltando.add(Manifest.permission.POST_NOTIFICATIONS)
         }
-        if (faltando.isEmpty()) iniciarServico()
-        else ActivityCompat.requestPermissions(this, faltando.toTypedArray(), reqPerm)
+        if (faltando.isEmpty()) {
+            iniciarServico()
+        } else {
+            ActivityCompat.requestPermissions(this, faltando.toTypedArray(), reqPerm)
+        }
     }
 
     override fun onRequestPermissionsResult(
         requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == reqPerm &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+        if (requestCode != reqPerm) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
                 == PackageManager.PERMISSION_GRANTED) {
             iniciarServico()
+        } else if (!ActivityCompat.shouldShowRequestPermissionRationale(
+                this, Manifest.permission.CAMERA)) {
+            startActivity(Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.fromParts("package", packageName, null)))
         } else {
-            tvStatus.text = "sem camera"
+            tvStatus.text = "SEM CAMERA"
         }
     }
 
     private fun iniciarServico() {
-        tvStatus.text = "no ar"
+        ligar(true)
         ContextCompat.startForegroundService(this, Intent(this, CameraService::class.java))
     }
 
@@ -88,10 +138,10 @@ class MainActivity : AppCompatActivity() {
 
         val t = TextView(this)
         t.text = "+1"
-        t.setTextColor(Color.WHITE)
-        t.textSize = 30f
+        t.setTextColor(Color.parseColor("#FFD54F"))
+        t.textSize = 32f
         t.setTypeface(null, Typeface.BOLD)
-        t.setShadowLayer(8f, 0f, 0f, Color.BLACK)
+        t.setShadowLayer(10f, 0f, 0f, Color.BLACK)
 
         val lp = FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -103,7 +153,7 @@ class MainActivity : AppCompatActivity() {
         raiz.addView(t)
 
         t.animate()
-            .translationY(-190f)
+            .translationY(-210f)
             .alpha(0f)
             .setDuration(900)
             .withEndAction { raiz.removeView(t) }
